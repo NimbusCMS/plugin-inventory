@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace NimbusCMS\Inventory;
 
 use Nimbus\Http\Request;
+use Nimbus\Http\Response;
 use Nimbus\Plugin\Plugin;
 use Nimbus\Plugin\PluginContext;
 use Nimbus\Plugin\PluginStorage;
@@ -51,8 +52,49 @@ final class InventoryPlugin implements Plugin
         // stock synchronously without touching Inventory's tables (ADR 0019).
         $context->services()->provide(ReservationPort::class, new ReservationAdapter($ledger, $reservations));
 
-        // A read-only admin overview (stock + movements); changes go through the tools.
-        $context->adminPages()->register('inventory', 'Inventory', '📦', static fn (Request $r): string => (new InventoryAdmin($storage))->render());
+        // Admin page: an overview plus receive/adjust forms (H3). The page handler
+        // gets a CSRF token (3rd arg) for the forms and shows the redirect notice.
+        $context->adminPages()->register(
+            'inventory',
+            'Inventory',
+            '📦',
+            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new InventoryAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err')),
+        );
+        $context->adminPages()->action('inventory', 'receive', static function (Request $r) use ($ledger): Response {
+            $sku = trim((string) ($r->input('sku') ?? ''));
+            $qty = trim((string) ($r->input('qty') ?? ''));
+            if ($sku === '' || $qty === '') {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+            $loc = trim((string) ($r->input('location') ?? '')) ?: 'main';
+            $uom = trim((string) ($r->input('uom') ?? '')) ?: 'each';
+            try {
+                $now = date('Y-m-d H:i:s');
+                $ledger->receive($sku, $ledger->ensureLocation($loc, $loc, $now), $qty, $uom, 'admin-ui', $now);
+                return Response::redirect('/admin/inventory?ok=received');
+            } catch (\Throwable) {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+        });
+        $context->adminPages()->action('inventory', 'adjust', static function (Request $r) use ($ledger): Response {
+            $sku = trim((string) ($r->input('sku') ?? ''));
+            $qty = trim((string) ($r->input('qty') ?? ''));
+            if ($sku === '' || $qty === '') {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+            $loc    = trim((string) ($r->input('location') ?? '')) ?: 'main';
+            $reason = trim((string) ($r->input('reason') ?? '')) ?: 'adjustment';
+            try {
+                $now   = date('Y-m-d H:i:s');
+                $locId = $ledger->ensureLocation($loc, $loc, $now);
+                $ledger->adjust($sku, $locId, $qty, $ledger->uomFor($sku, $locId) ?? 'each', 'admin-ui', $now, $reason);
+                return Response::redirect('/admin/inventory?ok=adjusted');
+            } catch (InsufficientStock) {
+                return Response::redirect('/admin/inventory?err=short');
+            } catch (\Throwable) {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+        });
 
         // Teach any MCP agent how to drive the ledger (ADR 0013).
         $context->skills()->register('Inventory', Guide::text());

@@ -17,14 +17,31 @@ use Nimbus\Plugin\PluginStorage;
  */
 final class InventoryAdmin
 {
+    private const NOTICES = [
+        'received' => ['ok', 'Stock received.'],
+        'adjusted' => ['ok', 'Stock adjusted.'],
+        'invalid'  => ['err', 'Check the SKU and quantity and try again.'],
+        'short'    => ['err', 'Not enough available for that adjustment.'],
+    ];
+
     /** @param \Closure():PluginStorage $storage */
     public function __construct(private \Closure $storage)
     {
     }
 
-    public function render(): string
+    /**
+     * @param string  $csrf   the CSRF token for the forms (passed by core to the page handler)
+     * @param ?string $notice a fixed notice code (from the ?ok=/?err= redirect), mapped to a message
+     */
+    public function render(string $csrf = '', ?string $notice = null): string
     {
         $s = ($this->storage)();
+
+        $banner = '';
+        if ($notice !== null && isset(self::NOTICES[$notice])) {
+            [$kind, $msg] = self::NOTICES[$notice];
+            $banner = '<div class="nb-notice nb-notice-' . ($kind === 'ok' ? 'ok' : 'error') . '">' . $this->e($msg) . '</div>';
+        }
 
         $locations = [];
         foreach ($s->select('SELECT id, code FROM ' . Schema::LOCATION) as $l) {
@@ -44,9 +61,10 @@ final class InventoryAdmin
              FROM ' . Schema::MOVEMENT . ' ORDER BY id DESC LIMIT 20',
         );
 
-        $html = '<div class="nb-page-head"><h1>Inventory</h1></div>'
+        $html = '<div class="nb-page-head"><h1>Inventory</h1></div>' . $banner
             . '<p class="nb-muted" style="margin:-8px 0 20px">Stock as an append-only ledger — on-hand, reserved and available per location. '
-            . 'Managed through the MCP tools (an agent can receive, adjust, count and transfer).</p>';
+            . 'Receive or adjust below, or drive it over MCP (an agent can also count and transfer).</p>'
+            . $this->forms($csrf);
 
         if ($stock === []) {
             $html .= '<p class="nb-muted">No stock yet. Receive some with the <code>inventory_receive</code> tool.</p>';
@@ -87,6 +105,35 @@ final class InventoryAdmin
         }
 
         return $html;
+    }
+
+    /** The receive + adjust forms. Each posts to its plugin admin action with the CSRF token. */
+    private function forms(string $csrf): string
+    {
+        $t = '<input type="hidden" name="_token" value="' . $this->e($csrf) . '">';
+
+        return '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem">'
+            . '<form class="nb-form-card" method="post" action="/admin/inventory/receive" style="flex:1 1 260px">'
+            . '<h2>Receive stock</h2>' . $t
+            . $this->field('SKU', 'sku', 'text', 'e.g. house-blend')
+            . $this->field('Location', 'location', 'text', 'main')
+            . $this->field('Quantity', 'qty', 'text', 'e.g. 12')
+            . $this->field('Unit', 'uom', 'text', 'each')
+            . '<button type="submit" class="nb-btn nb-btn-primary">Receive</button></form>'
+            . '<form class="nb-form-card" method="post" action="/admin/inventory/adjust" style="flex:1 1 260px">'
+            . '<h2>Adjust stock</h2>' . $t
+            . $this->field('SKU', 'sku', 'text', 'e.g. house-blend')
+            . $this->field('Location', 'location', 'text', 'main')
+            . $this->field('Change (+/−)', 'qty', 'text', 'e.g. -3')
+            . $this->field('Reason', 'reason', 'text', 'waste')
+            . '<button type="submit" class="nb-btn nb-btn-primary">Adjust</button></form>'
+            . '</div>';
+    }
+
+    private function field(string $label, string $name, string $type, string $placeholder): string
+    {
+        return '<div class="nb-field"><label for="inv-' . $this->e($name) . '">' . $this->e($label) . '</label>'
+            . '<input type="' . $this->e($type) . '" id="inv-' . $this->e($name) . '" name="' . $this->e($name) . '" placeholder="' . $this->e($placeholder) . '"></div>';
     }
 
     private function e(string $v): string
