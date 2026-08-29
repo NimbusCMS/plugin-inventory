@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace NimbusCMS\Inventory;
 
+use Nimbus\Http\Request;
 use Nimbus\Plugin\Plugin;
 use Nimbus\Plugin\PluginContext;
 use Nimbus\Plugin\PluginStorage;
@@ -49,6 +50,9 @@ final class InventoryPlugin implements Plugin
         // Publish the reservation contract so Commerce (or any plugin) can reserve
         // stock synchronously without touching Inventory's tables (ADR 0019).
         $context->services()->provide(ReservationPort::class, new ReservationAdapter($ledger, $reservations));
+
+        // A read-only admin overview (stock + movements); changes go through the tools.
+        $context->adminPages()->register('inventory', 'Inventory', '📦', static fn (Request $r): string => (new InventoryAdmin($storage))->render());
 
         // Teach any MCP agent how to drive the ledger (ADR 0013).
         $context->skills()->register('Inventory', Guide::text());
