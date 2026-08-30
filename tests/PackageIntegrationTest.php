@@ -98,7 +98,7 @@ final class PackageIntegrationTest extends TestCase
         self::assertSame([], $diagnostics, 'a correctly installed package must load cleanly');
         self::assertSame([InventoryPlugin::ID => $this->manifest()['name']], $loader->registered());
 
-        self::assertSame(['nimbuscms.inventory:001_ledger', 'nimbuscms.inventory:002_reservations'], array_column($migrations->all(), 'name'), 'its ledger + reservation migrations');
+        self::assertSame(['nimbuscms.inventory:001_ledger', 'nimbuscms.inventory:002_reservations', 'nimbuscms.inventory:003_items'], array_column($migrations->all(), 'name'), 'its ledger + reservation + item-master migrations');
         self::assertSame([InventoryPlugin::ID], $capabilities->managementResources(), 'its grantable capability');
         self::assertCount(1, $mcpToolsets->all(), 'its MCP toolset');
         self::assertNotSame([], $skills->documents(), 'its agent guide');

@@ -27,8 +27,14 @@ namespace NimbusCMS\Inventory;
  *     a new domain's reason must not be an Inventory migration.
  *  4. `lot_id` / `unit_id` are nullable from day one, so lots and serials slot in
  *     later without re-folding the ledger.
- *  5. Catalog (item/SKU) lives in *content* (collections), not here — the ledger
- *     references a SKU only by its opaque `sku_code`.
+ *  5. A SKU may **optionally** carry a sellable *item* record (name, price,
+ *     category, …) in {@see ITEM} — the retail counterpart to a content catalog,
+ *     for goods you stock and sell as-is (ADR 0022). It is additive: the ledger
+ *     still references a SKU only by its opaque `sku_code`, a SKU can have stock
+ *     with no item (and vice-versa), and a pure-ledger user's tables are
+ *     untouched. This supersedes the plugin's original "catalog lives only in
+ *     content" stance — content collections remain the catalog for *editorial*
+ *     items (a menu, a showcase); the item master is for *operational* stock.
  */
 final class Schema
 {
@@ -36,6 +42,8 @@ final class Schema
     public const LOCATION    = 'inventory_location';
     public const STOCK       = 'inventory_stock';
     public const RESERVATION = 'inventory_reservation';
+    public const ITEM        = 'inventory_item';
+    public const CATEGORY    = 'inventory_category';
 
     /**
      * The reservation overlay (Commerce slice 1). A soft hold on stock —
@@ -58,6 +66,48 @@ final class Schema
                 created_at  DATETIME NOT NULL,
                 INDEX idx_sku_location (sku_code, location_id),
                 INDEX idx_ref (ref)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        ];
+    }
+
+    /**
+     * The optional item master (ADR 0022): a SKU's sellable attributes, keyed by
+     * the same opaque `sku_code` the ledger uses — still **no** foreign key into
+     * core (`image_media_id` is a soft ref resolved defensively at render). A
+     * lightweight two-level category taxonomy backs storefront browsing; a child
+     * category (one whose `parent_id` is set) can never itself be a parent, which
+     * fixes the depth at two and makes cycles structurally impossible.
+     *
+     * @return list<string> each statement individually idempotent (ADR 0005)
+     */
+    public static function items(): array
+    {
+        return [
+            'CREATE TABLE IF NOT EXISTS ' . self::CATEGORY . ' (
+                id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                name       VARCHAR(120) NOT NULL,
+                slug       VARCHAR(140) NOT NULL,
+                parent_id  BIGINT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uq_category_slug (slug),
+                INDEX idx_category_parent (parent_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+
+            'CREATE TABLE IF NOT EXISTS ' . self::ITEM . ' (
+                sku_code       VARCHAR(80) NOT NULL PRIMARY KEY,
+                name           VARCHAR(200) NOT NULL,
+                price          DECIMAL(18,2) NOT NULL DEFAULT 0,
+                unit           VARCHAR(32) NULL,
+                description    TEXT NULL,
+                image_media_id BIGINT UNSIGNED NULL,
+                category_id    BIGINT UNSIGNED NULL,
+                active         TINYINT(1) NOT NULL DEFAULT 1,
+                featured       TINYINT(1) NOT NULL DEFAULT 0,
+                created_at     DATETIME NOT NULL,
+                updated_at     DATETIME NOT NULL,
+                INDEX idx_item_category (category_id),
+                INDEX idx_item_active (active)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         ];
     }

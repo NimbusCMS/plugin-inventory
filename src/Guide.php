@@ -23,8 +23,13 @@ final class Guide
             ## Model
 
             - A **SKU** is identified by its `sku_code` (the sku entry's code/slug).
-              The catalog (items, SKUs) lives in ordinary collections — manage it
-              with the content tools. Inventory only tracks quantities by `sku_code`.
+              A SKU can **optionally** carry a sellable **item** record here — name,
+              price, category, unit, image, flags — the source of truth a storefront
+              reads (`inventory_item_*` tools). Stock and the item are independent: a
+              SKU can have stock with no item, or an item with no stock yet. For an
+              *editorial* catalog (a café menu, a curated showcase), a content
+              collection is still the right home; the item master is for operational
+              goods you stock and sell as-is.
             - A **location** is a named place stock sits (`shelf-a`, `main`). Passing
               a new location code creates it.
             - **On-hand** is per (SKU, location). Quantities are decimals with up to
@@ -47,6 +52,24 @@ final class Guide
             - `inventory_stock` — on-hand, reserved, and **available** (on-hand −
               reserved) per location for a SKU.
             - `inventory_movements` — the audit trail for a SKU.
+            - `inventory_item_set` — create/update a SKU's item (name, price,
+              category, unit, image, flags). Only the fields you send change.
+            - `inventory_item_get` — a SKU's item record, or none.
+            - `inventory_category_set` — create (omit `id`) or rename/reparent (with
+              `id`) a category. `inventory_category_get` / `inventory_categories`
+              read them.
+
+            ## The item master
+
+            - **Price** is a non-negative decimal string with up to 2 places
+              (`"3.49"`). It is the source of truth a storefront and checkout read.
+            - **`description` is plain text** — no HTML; it is stored raw and escaped
+              where shown.
+            - **`image_media_id`** is a media-library id (optional); a missing image
+              simply renders nothing.
+            - **Categories are two levels.** A category with a `parent_id` is a child
+              and cannot itself be a parent. A category in use can't be deleted —
+              reassign its items/children first.
 
             ## Reservations
 
