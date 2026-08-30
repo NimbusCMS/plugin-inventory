@@ -8,6 +8,7 @@ use Nimbus\Database\Connection;
 use Nimbus\Plugin\PluginStorage;
 use NimbusCMS\Inventory\InventoryAdmin;
 use NimbusCMS\Inventory\Ledger;
+use NimbusCMS\Inventory\Reservations;
 use NimbusCMS\Inventory\Schema;
 use PHPUnit\Framework\TestCase;
 
@@ -93,5 +94,45 @@ final class InventoryAdminTest extends TestCase
         self::assertStringContainsString('Stock transferred.', $this->admin->render('tok', 'transferred'));
         self::assertStringContainsString('Choose two different locations', $this->admin->render('tok', 'samelocation'));
         self::assertStringNotContainsString('nb-notice', $this->admin->render('tok', 'nonsense-code'));
+    }
+
+    public function test_the_stock_rows_link_to_the_sku_drilldown(): void
+    {
+        $html = $this->admin->render('tok');
+        self::assertStringContainsString('href="/admin/inventory?sku=house-blend"', $html);
+    }
+
+    public function test_the_sku_drilldown_shows_stock_holds_and_trail(): void
+    {
+        // Put a hold on house-blend so the drill-down has an open hold to explain.
+        $storage = new PluginStorage($this->db);
+        $ledger  = new Ledger(static fn (): PluginStorage => $storage);
+        $res     = new Reservations(static fn (): PluginStorage => $storage, $ledger);
+        $loc     = $ledger->ensureLocation('main', 'Main', '2026-01-01 09:00:00');
+        $res->reserve('house-blend', $loc, '5', 'ORD-TEST:1', '2026-01-01 10:00:00');
+
+        $html = $this->admin->render('tok', null, null, 'house-blend');
+
+        self::assertStringContainsString('SKU <code>house-blend</code>', $html);
+        self::assertStringContainsString('Stock by location', $html);
+        self::assertStringContainsString('Open holds', $html);
+        self::assertStringContainsString('ORD-TEST:1', $html, 'the hold ref explains the reservation');
+        self::assertStringContainsString('Movement trail', $html);
+        self::assertStringContainsString('receipt', $html, 'the seeding receipt is in the trail');
+    }
+
+    public function test_the_drilldown_escapes_and_binds_a_hostile_sku(): void
+    {
+        // Reflected-XSS + SQLi guard on ?sku=: bound (no error, no rows) and escaped.
+        $html = $this->admin->render('tok', null, null, '"><script>alert(1)</script>');
+
+        self::assertStringNotContainsString('<script>alert(1)</script>', $html);
+        self::assertStringContainsString('Nothing recorded for this SKU', $html);
+    }
+
+    public function test_an_unknown_sku_shows_a_helpful_note(): void
+    {
+        $html = $this->admin->render('tok', null, null, 'no-such-sku');
+        self::assertStringContainsString('Nothing recorded for this SKU', $html);
     }
 }
