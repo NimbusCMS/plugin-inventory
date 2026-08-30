@@ -16,6 +16,11 @@ use Nimbus\Plugin\PluginStorage;
  * value is escaped before it reaches the page. The SKU/location inputs offer a
  * `<datalist>` of what already exists (a typo-guard, not a hard gate — receiving a
  * genuinely new SKU is still allowed by typing it).
+ *
+ * The admin CSP is nonce-only for `style-src` (no `'unsafe-inline'`), so inline
+ * `style=` attributes are dropped by the browser. All styling therefore lives in
+ * ONE nonce-carrying `<style>` block ({@see styles}), emitted once per render with
+ * the CSP nonce the page handler receives — never as inline attributes.
  */
 final class InventoryAdmin
 {
@@ -40,12 +45,15 @@ final class InventoryAdmin
      * @param ?string $notice a fixed notice code (from the ?ok=/?err= redirect), mapped to a message
      * @param ?string $q      a SKU filter substring (from ?q=), applied to the stock table
      * @param ?string $sku    a specific SKU (from ?sku=) — renders the drill-down instead of the overview
+     * @param string  $nonce  the request CSP nonce (2nd arg the page handler receives)
      */
-    public function render(string $csrf = '', ?string $notice = null, ?string $q = null, ?string $sku = null): string
+    public function render(string $csrf = '', ?string $notice = null, ?string $q = null, ?string $sku = null, string $nonce = ''): string
     {
-        $s = ($this->storage)();
+        $s      = ($this->storage)();
+        $styles = $this->styles($nonce);
+
         if ($sku !== null && trim($sku) !== '') {
-            return $this->renderDetail($s, trim($sku), $notice);
+            return $styles . $this->renderDetail($s, trim($sku), $notice);
         }
         $q = $q !== null ? trim($q) : '';
 
@@ -79,14 +87,14 @@ final class InventoryAdmin
              FROM ' . Schema::MOVEMENT . ' ORDER BY id DESC LIMIT 20',
         );
 
-        $html = '<div class="nb-page-head"><h1>Inventory</h1></div>' . $banner
-            . '<p class="nb-muted" style="margin:-8px 0 20px">Stock as an append-only ledger — on-hand, reserved and available per location. '
+        $html = $styles . '<div class="nb-page-head"><h1>Inventory</h1></div>' . $banner
+            . '<p class="nb-muted ix-intro">Stock as an append-only ledger — on-hand, reserved and available per location. '
             . 'Filter it below, record a movement, or drive it all over MCP.</p>'
             . $this->datalists($skus, array_values($locations));
 
         // Lead with the stock overview — the operator wants to *see* inventory
         // first; the movement forms come after.
-        $html .= '<h2 style="margin-top:1.5rem">Stock on hand</h2>';
+        $html .= '<h2 class="ix-mt15">Stock on hand</h2>';
         $html .= $this->filterForm($q);
         if ($stock === []) {
             $html .= $q === ''
@@ -94,8 +102,8 @@ final class InventoryAdmin
                 : '<p class="nb-muted">No stock matches “' . $this->e($q) . '”.</p>';
         } else {
             $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
-                . '<th>SKU</th><th>Location</th><th style="text-align:right">On hand</th>'
-                . '<th style="text-align:right">Reserved</th><th style="text-align:right">Available</th></tr></thead><tbody>';
+                . '<th>SKU</th><th>Location</th><th class="ix-r">On hand</th>'
+                . '<th class="ix-r">Reserved</th><th class="ix-r">Available</th></tr></thead><tbody>';
             foreach ($stock as $r) {
                 $onHand   = (string) $r['on_hand'];
                 $reserved = (string) $r['reserved'];
@@ -103,28 +111,28 @@ final class InventoryAdmin
                 $loc      = $locations[(int) $r['location_id']] ?? (string) $r['location_id'];
                 $html .= '<tr><td data-label="SKU">' . $this->skuLink((string) $r['sku_code']) . '</td>'
                     . '<td data-label="Location">' . $this->e($loc) . '</td>'
-                    . '<td data-label="On hand" style="text-align:right">' . $this->e($onHand) . ' ' . $this->e((string) $r['uom']) . '</td>'
-                    . '<td data-label="Reserved" style="text-align:right">' . $this->e($reserved) . '</td>'
-                    . '<td data-label="Available" style="text-align:right"><strong>' . $this->e($avail) . '</strong></td></tr>';
+                    . '<td data-label="On hand" class="ix-r">' . $this->e($onHand) . ' ' . $this->e((string) $r['uom']) . '</td>'
+                    . '<td data-label="Reserved" class="ix-r">' . $this->e($reserved) . '</td>'
+                    . '<td data-label="Available" class="ix-r"><strong>' . $this->e($avail) . '</strong></td></tr>';
             }
             $html .= '</tbody></table></div>';
         }
 
         // The movement forms, after the overview.
-        $html .= '<h2 style="margin-top:2rem">Record a movement</h2>';
+        $html .= '<h2 class="ix-mt2">Record a movement</h2>';
         $html .= $this->forms($csrf);
 
-        $html .= '<h2 style="margin-top:2rem">Recent movements</h2>';
+        $html .= '<h2 class="ix-mt2">Recent movements</h2>';
         if ($movements === []) {
             $html .= '<p class="nb-muted">None yet.</p>';
         } else {
             $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
-                . '<th>SKU</th><th>Location</th><th style="text-align:right">Qty</th><th>Reason</th><th>Actor</th><th>When</th></tr></thead><tbody>';
+                . '<th>SKU</th><th>Location</th><th class="ix-r">Qty</th><th>Reason</th><th>Actor</th><th>When</th></tr></thead><tbody>';
             foreach ($movements as $m) {
                 $loc = $locations[(int) $m['location_id']] ?? (string) $m['location_id'];
                 $html .= '<tr><td data-label="SKU">' . $this->skuLink((string) $m['sku_code']) . '</td>'
                     . '<td data-label="Location">' . $this->e($loc) . '</td>'
-                    . '<td data-label="Qty" style="text-align:right">' . $this->e((string) $m['qty']) . ' ' . $this->e((string) $m['uom']) . '</td>'
+                    . '<td data-label="Qty" class="ix-r">' . $this->e((string) $m['qty']) . ' ' . $this->e((string) $m['uom']) . '</td>'
                     . '<td data-label="Reason">' . $this->e((string) $m['reason']) . '</td>'
                     . '<td data-label="Actor">' . $this->e((string) $m['actor']) . '</td>'
                     . '<td data-label="When" class="nb-muted">' . $this->e((string) $m['occurred_at']) . '</td></tr>';
@@ -166,8 +174,8 @@ final class InventoryAdmin
         );
 
         $html = '<div class="nb-page-head"><h1>Inventory</h1></div>' . $this->notice($notice)
-            . '<p style="margin:-8px 0 16px"><a href="/admin/inventory">&larr; All stock</a></p>'
-            . '<h2 style="margin-top:0">SKU <code>' . $this->e($sku) . '</code></h2>';
+            . '<p class="ix-back"><a href="/admin/inventory">&larr; All stock</a></p>'
+            . '<h2 class="ix-mt0">SKU <code>' . $this->e($sku) . '</code></h2>';
 
         if ($stock === [] && $holds === [] && $moves === []) {
             return $html . '<p class="nb-muted">Nothing recorded for this SKU. It may be a mistyped code — check the <a href="/admin/inventory">stock list</a>.</p>';
@@ -179,45 +187,45 @@ final class InventoryAdmin
             $html .= '<p class="nb-muted">None on hand.</p>';
         } else {
             $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
-                . '<th>Location</th><th style="text-align:right">On hand</th>'
-                . '<th style="text-align:right">Reserved</th><th style="text-align:right">Available</th></tr></thead><tbody>';
+                . '<th>Location</th><th class="ix-r">On hand</th>'
+                . '<th class="ix-r">Reserved</th><th class="ix-r">Available</th></tr></thead><tbody>';
             foreach ($stock as $r) {
                 $onHand = (string) $r['on_hand'];
                 $avail  = number_format(max(0, (float) $onHand - (float) $r['reserved']), 4, '.', '');
                 $html .= '<tr><td data-label="Location">' . $this->e($loc((int) $r['location_id'])) . '</td>'
-                    . '<td data-label="On hand" style="text-align:right">' . $this->e($onHand) . ' ' . $this->e((string) $r['uom']) . '</td>'
-                    . '<td data-label="Reserved" style="text-align:right">' . $this->e((string) $r['reserved']) . '</td>'
-                    . '<td data-label="Available" style="text-align:right"><strong>' . $this->e($avail) . '</strong></td></tr>';
+                    . '<td data-label="On hand" class="ix-r">' . $this->e($onHand) . ' ' . $this->e((string) $r['uom']) . '</td>'
+                    . '<td data-label="Reserved" class="ix-r">' . $this->e((string) $r['reserved']) . '</td>'
+                    . '<td data-label="Available" class="ix-r"><strong>' . $this->e($avail) . '</strong></td></tr>';
             }
             $html .= '</tbody></table></div>';
         }
 
         // Open holds — answers "why is N reserved?".
-        $html .= '<h3 style="margin-top:1.5rem">Open holds</h3>';
+        $html .= '<h3 class="ix-mt15">Open holds</h3>';
         if ($holds === []) {
             $html .= '<p class="nb-muted">No stock is currently reserved.</p>';
         } else {
             $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
-                . '<th>Ref</th><th>Location</th><th style="text-align:right">Qty</th><th>Age</th></tr></thead><tbody>';
+                . '<th>Ref</th><th>Location</th><th class="ix-r">Qty</th><th>Age</th></tr></thead><tbody>';
             foreach ($holds as $h) {
                 $html .= '<tr><td data-label="Ref"><code>' . $this->e((string) $h['ref']) . '</code></td>'
                     . '<td data-label="Location">' . $this->e($loc((int) $h['location_id'])) . '</td>'
-                    . '<td data-label="Qty" style="text-align:right">' . $this->e((string) $h['qty']) . '</td>'
+                    . '<td data-label="Qty" class="ix-r">' . $this->e((string) $h['qty']) . '</td>'
                     . '<td data-label="Age" class="nb-muted">' . $this->e($this->age((string) $h['created_at'])) . '</td></tr>';
             }
             $html .= '</tbody></table></div>';
         }
 
         // Full movement trail.
-        $html .= '<h3 style="margin-top:1.5rem">Movement trail</h3>';
+        $html .= '<h3 class="ix-mt15">Movement trail</h3>';
         if ($moves === []) {
             $html .= '<p class="nb-muted">No movements.</p>';
         } else {
             $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
-                . '<th style="text-align:right">Qty</th><th>Reason</th><th>Ref</th><th>Actor</th><th>When</th></tr></thead><tbody>';
+                . '<th class="ix-r">Qty</th><th>Reason</th><th>Ref</th><th>Actor</th><th>When</th></tr></thead><tbody>';
             foreach ($moves as $m) {
                 $ref = trim(((string) ($m['ref_type'] ?? '')) . ' ' . ((string) ($m['ref_id'] ?? '')));
-                $html .= '<tr><td data-label="Qty" style="text-align:right">' . $this->e((string) $m['qty']) . ' ' . $this->e((string) $m['uom']) . '</td>'
+                $html .= '<tr><td data-label="Qty" class="ix-r">' . $this->e((string) $m['qty']) . ' ' . $this->e((string) $m['uom']) . '</td>'
                     . '<td data-label="Reason">' . $this->e((string) $m['reason']) . '</td>'
                     . '<td data-label="Ref" class="nb-muted">' . ($ref === '' ? '—' : $this->e($ref)) . '</td>'
                     . '<td data-label="Actor">' . $this->e((string) $m['actor']) . '</td>'
@@ -227,6 +235,24 @@ final class InventoryAdmin
         }
 
         return $html;
+    }
+
+    /**
+     * The one nonce-carrying stylesheet for this page — the CSP is nonce-only, so
+     * this is how the plugin styles its admin surface (inline `style=` is dropped).
+     */
+    private function styles(string $nonce): string
+    {
+        $css = '.ix-intro{margin:-8px 0 20px}'
+            . '.ix-back{margin:-8px 0 16px}'
+            . '.ix-mt0{margin-top:0}.ix-mt15{margin-top:1.5rem}.ix-mt2{margin-top:2rem}'
+            . '.ix-r{text-align:right}'
+            . '.ix-forms{display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1.5rem}'
+            . '.ix-card{flex:1 1 240px}'
+            . '.ix-note{margin-top:-6px;font-size:.85rem}'
+            . '.ix-filter{display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:.75rem}'
+            . '.ix-filter-field{flex:1 1 220px;margin:0}';
+        return '<style nonce="' . $this->e($nonce) . '">' . $css . '</style>';
     }
 
     private function notice(?string $notice): string
@@ -293,8 +319,8 @@ final class InventoryAdmin
     {
         $t = '<input type="hidden" name="_token" value="' . $this->e($csrf) . '">';
 
-        return '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1.5rem">'
-            . '<form class="nb-form-card" method="post" action="/admin/inventory/receive" style="flex:1 1 240px">'
+        return '<div class="ix-forms">'
+            . '<form class="nb-form-card ix-card" method="post" action="/admin/inventory/receive">'
             . '<h2>Receive stock</h2>' . $t
             . $this->field('SKU', 'sku', 'e.g. house-blend', 'inv-skus')
             . $this->field('Location', 'location', 'main', 'inv-locs')
@@ -302,7 +328,7 @@ final class InventoryAdmin
             . $this->field('Unit', 'uom', 'each')
             . '<button type="submit" class="nb-btn nb-btn-primary">Receive</button></form>'
 
-            . '<form class="nb-form-card" method="post" action="/admin/inventory/adjust" style="flex:1 1 240px">'
+            . '<form class="nb-form-card ix-card" method="post" action="/admin/inventory/adjust">'
             . '<h2>Adjust stock</h2>' . $t
             . $this->field('SKU', 'sku', 'e.g. house-blend', 'inv-skus')
             . $this->field('Location', 'location', 'main', 'inv-locs')
@@ -310,15 +336,15 @@ final class InventoryAdmin
             . $this->field('Reason', 'reason', 'waste')
             . '<button type="submit" class="nb-btn nb-btn-primary">Adjust</button></form>'
 
-            . '<form class="nb-form-card" method="post" action="/admin/inventory/count" style="flex:1 1 240px">'
+            . '<form class="nb-form-card ix-card" method="post" action="/admin/inventory/count">'
             . '<h2>Count stock</h2>' . $t
-            . '<p class="nb-muted" style="margin-top:-6px;font-size:.85rem">Set on-hand to a counted figure; the correction is recorded as a movement.</p>'
+            . '<p class="nb-muted ix-note">Set on-hand to a counted figure; the correction is recorded as a movement.</p>'
             . $this->field('SKU', 'sku', 'e.g. house-blend', 'inv-skus')
             . $this->field('Location', 'location', 'main', 'inv-locs')
             . $this->field('Counted', 'qty', 'e.g. 40')
             . '<button type="submit" class="nb-btn nb-btn-primary">Record count</button></form>'
 
-            . '<form class="nb-form-card" method="post" action="/admin/inventory/transfer" style="flex:1 1 240px">'
+            . '<form class="nb-form-card ix-card" method="post" action="/admin/inventory/transfer">'
             . '<h2>Transfer stock</h2>' . $t
             . $this->field('SKU', 'sku', 'e.g. house-blend', 'inv-skus')
             . $this->field('From', 'from', 'main', 'inv-locs')
@@ -331,8 +357,8 @@ final class InventoryAdmin
     /** A SKU substring filter for the stock table (GET, no JS). */
     private function filterForm(string $q): string
     {
-        return '<form method="get" action="/admin/inventory" class="nb-stack" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:.75rem">'
-            . '<div class="nb-field" style="flex:1 1 220px;margin:0"><label for="inv-q">Filter by SKU</label>'
+        return '<form method="get" action="/admin/inventory" class="nb-stack ix-filter">'
+            . '<div class="nb-field ix-filter-field"><label for="inv-q">Filter by SKU</label>'
             . '<input id="inv-q" type="search" name="q" value="' . $this->e($q) . '" placeholder="e.g. house"></div>'
             . '<button type="submit" class="nb-btn">Filter</button>'
             . ($q === '' ? '' : ' <a class="nb-btn" href="/admin/inventory">Clear</a>')

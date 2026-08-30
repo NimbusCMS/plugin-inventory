@@ -61,7 +61,7 @@ final class InventoryPlugin implements Plugin
             'inventory',
             'Inventory',
             '📦',
-            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new InventoryAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('q'), $r->query('sku')),
+            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new InventoryAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('q'), $r->query('sku'), $nonce),
             self::ID . ':write',
         );
         $context->adminPages()->action('inventory', 'receive', static function (Request $r) use ($ledger): Response {
