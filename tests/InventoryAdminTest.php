@@ -135,4 +135,17 @@ final class InventoryAdminTest extends TestCase
         $html = $this->admin->render('tok', null, null, 'no-such-sku');
         self::assertStringContainsString('Nothing recorded for this SKU', $html);
     }
+
+    public function test_styling_is_a_nonced_style_block_not_inline_attributes(): void
+    {
+        // The admin CSP is nonce-only for style-src, so inline style= is dropped.
+        // Both the overview and the drill-down must style via one nonce'd block.
+        $overview = $this->admin->render('tok', null, null, null, 'NONCE123');
+        self::assertStringContainsString('<style nonce="NONCE123">', $overview, 'a nonce-carrying style block');
+        self::assertDoesNotMatchRegularExpression('/\sstyle\s*=\s*"/', $overview, 'no inline style= in the overview');
+
+        $detail = $this->admin->render('tok', null, null, 'house-blend', 'NONCE123');
+        self::assertStringContainsString('<style nonce="NONCE123">', $detail);
+        self::assertDoesNotMatchRegularExpression('/\sstyle\s*=\s*"/', $detail, 'no inline style= in the drill-down');
+    }
 }
