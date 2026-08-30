@@ -12,11 +12,15 @@ use Nimbus\Mcp\PluginToolset;
 /**
  * Inventory over MCP — the agent-driven onboarding the initiative is built around.
  *
- * Six tools under the `inventory` namespace: four writes (receive, adjust, count,
- * transfer) and two reads (stock, movements). The {@see PluginToolset} base gates
+ * Tools under the `inventory` namespace: the ledger writes (receive, adjust,
+ * count, transfer) and reservation writes (reserve, release, issue); the reads
+ * (stock, movements); and the **item master** (ADR 0022) — `item_set`/`item_get`
+ * and `category_set`/`category_get`/`categories`, so an agent can manage the
+ * sellable catalog, not just the numbers. The {@see PluginToolset} base gates
  * every one on the plugin's own `nimbuscms.inventory` capability (ADR 0015/0016) —
  * a write tool needs `:write`, unreachable by a content token — so this class
- * writes no authorization code.
+ * writes no authorization code. (Deletes stay admin-only in Slice 1 — a recorded
+ * deferral of an MCP delete tool.)
  *
  * Two things the handlers guarantee, per the security review:
  *  - **`actor` and `occurred_at` are server-set** — the token's name and the
@@ -26,7 +30,7 @@ use Nimbus\Mcp\PluginToolset;
  */
 final class InventoryToolset extends PluginToolset
 {
-    public function __construct(private Ledger $ledger, private Reservations $reservations)
+    public function __construct(private Ledger $ledger, private Reservations $reservations, private Catalog $catalog)
     {
     }
 
@@ -97,6 +101,49 @@ final class InventoryToolset extends PluginToolset
                 'required'   => ['sku'],
                 'properties' => ['sku' => $sku, 'limit' => ['type' => 'integer', 'description' => 'Max rows (1–500, default 50).']],
             ], $this->movements(...)),
+
+            new PluginTool('item_set', 'write', 'Create or update a SKU\'s sellable item record (name, price, category, …). Only the fields you send change; the rest keep their stored value.', [
+                'type'       => 'object',
+                'required'   => ['sku', 'name'],
+                'properties' => [
+                    'sku'            => $sku,
+                    'name'           => ['type' => 'string', 'description' => 'Display name of the item.'],
+                    'price'          => ['type' => 'string', 'description' => 'A non-negative amount, up to 2 decimals (e.g. "3.49"). Defaults to 0.'],
+                    'unit'           => ['type' => 'string', 'description' => 'Selling unit (e.g. "each", "kg", "500g pack"). Optional.'],
+                    'description'    => ['type' => 'string', 'description' => 'Plain-text description (no HTML). Optional.'],
+                    'image_media_id' => ['type' => 'integer', 'description' => 'A media-library id for the item image. Optional.'],
+                    'category_id'    => ['type' => 'integer', 'description' => 'An existing category id. Optional.'],
+                    'active'         => ['type' => 'boolean', 'description' => 'Whether the item is sellable/visible (default true).'],
+                    'featured'       => ['type' => 'boolean', 'description' => 'Whether to feature the item (default false).'],
+                ],
+            ], $this->itemSet(...)),
+
+            new PluginTool('item_get', 'read', 'The sellable item record for a SKU (name, price, category, flags), or none.', [
+                'type'       => 'object',
+                'required'   => ['sku'],
+                'properties' => ['sku' => $sku],
+            ], $this->itemGet(...)),
+
+            new PluginTool('category_set', 'write', 'Create a category (omit id) or rename/reparent one (with id). Two levels only.', [
+                'type'       => 'object',
+                'required'   => ['name'],
+                'properties' => [
+                    'id'        => ['type' => 'integer', 'description' => 'Existing category id to update; omit to create.'],
+                    'name'      => ['type' => 'string', 'description' => 'Category name.'],
+                    'parent_id' => ['type' => 'integer', 'description' => 'An existing top-level category id to nest under. Omit for a top-level category.'],
+                ],
+            ], $this->categorySet(...)),
+
+            new PluginTool('category_get', 'read', 'One category by id.', [
+                'type'       => 'object',
+                'required'   => ['id'],
+                'properties' => ['id' => ['type' => 'integer', 'description' => 'The category id.']],
+            ], $this->categoryGet(...)),
+
+            new PluginTool('categories', 'read', 'All categories, ordered as a two-level tree.', [
+                'type'       => 'object',
+                'properties' => new \stdClass(),
+            ], $this->categories(...)),
         ];
     }
 
@@ -232,6 +279,67 @@ final class InventoryToolset extends PluginToolset
         return ['sku' => $sku, 'movements' => $this->ledger->movementsFor($sku, $limit)];
     }
 
+    /**
+     * @param array<string,mixed> $a
+     * @return array<string,mixed>
+     */
+    private function itemSet(array $a, TokenPrincipal $p, EntryOpContext $c): array
+    {
+        return $this->guard(function () use ($a): array {
+            $sku = $this->str($a, 'sku');
+            // saveItem reads only its own allow-listed keys from the arguments —
+            // an unknown key (or a forged sku_code/timestamp) is ignored.
+            $this->catalog->saveItem($sku, $a, $this->now());
+            return ['ok' => true, 'item' => $this->catalog->getItem($sku)];
+        });
+    }
+
+    /**
+     * @param array<string,mixed> $a
+     * @return array<string,mixed>
+     */
+    private function itemGet(array $a, TokenPrincipal $p, EntryOpContext $c): array
+    {
+        $sku = $this->str($a, 'sku');
+        return ['sku' => $sku, 'item' => $this->catalog->getItem($sku)];
+    }
+
+    /**
+     * @param array<string,mixed> $a
+     * @return array<string,mixed>
+     */
+    private function categorySet(array $a, TokenPrincipal $p, EntryOpContext $c): array
+    {
+        return $this->guard(function () use ($a): array {
+            $id       = $this->nullableInt($a, 'id');
+            $parentId = $this->nullableInt($a, 'parent_id');
+            $newId    = $this->catalog->saveCategory($id, $this->str($a, 'name'), $parentId, $this->now());
+            return ['ok' => true, 'category' => $this->catalog->getCategory($newId)];
+        });
+    }
+
+    /**
+     * @param array<string,mixed> $a
+     * @return array<string,mixed>
+     */
+    private function categoryGet(array $a, TokenPrincipal $p, EntryOpContext $c): array
+    {
+        $id = $this->nullableInt($a, 'id');
+        if ($id === null) {
+            return ['ok' => false, 'error' => 'invalid', 'message' => '"id" is required.'];
+        }
+        return ['id' => $id, 'category' => $this->catalog->getCategory($id)];
+    }
+
+    /**
+     * @param array<string,mixed> $a
+     * @return array<string,mixed>
+     */
+    private function categories(array $a, TokenPrincipal $p, EntryOpContext $c): array
+    {
+        return ['categories' => $this->catalog->allCategories()];
+    }
+
     // --- helpers ---------------------------------------------------------
 
     /**
@@ -301,6 +409,22 @@ final class InventoryToolset extends PluginToolset
     {
         $v = $this->nullableStr($a, $key);
         return $v ?? $default;
+    }
+
+    /** @param array<string,mixed> $a */
+    private function nullableInt(array $a, string $key): ?int
+    {
+        $v = $a[$key] ?? null;
+        if ($v === null || $v === '') {
+            return null;
+        }
+        if (is_int($v)) {
+            return $v;
+        }
+        if (is_string($v) && preg_match('/^\d+$/', trim($v)) === 1) {
+            return (int) trim($v);
+        }
+        throw new \InvalidArgumentException("\"{$key}\" must be a whole number.");
     }
 
     /** @param array<string,mixed> $a */
