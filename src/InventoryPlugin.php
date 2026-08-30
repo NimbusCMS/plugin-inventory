@@ -52,13 +52,17 @@ final class InventoryPlugin implements Plugin
         // stock synchronously without touching Inventory's tables (ADR 0019).
         $context->services()->provide(ReservationPort::class, new ReservationAdapter($ledger, $reservations));
 
-        // Admin page: an overview plus receive/adjust forms (H3). The page handler
-        // gets a CSRF token (3rd arg) for the forms and shows the redirect notice.
+        // Admin page: an overview plus the receive/adjust/count/transfer forms (H3).
+        // Gated on this plugin's own wildcard-immune capability (ADR 0020) — moving
+        // stock in the UI needs `nimbuscms.inventory:write`, exactly like the MCP
+        // tools, so a content-only editor can't. The handler gets a CSRF token (3rd
+        // arg) for the forms and shows the redirect notice.
         $context->adminPages()->register(
             'inventory',
             'Inventory',
             '📦',
-            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new InventoryAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err')),
+            static fn (Request $r, string $nonce = '', string $csrf = ''): string => (new InventoryAdmin($storage))->render($csrf, $r->query('ok') ?? $r->query('err'), $r->query('q')),
+            self::ID . ':write',
         );
         $context->adminPages()->action('inventory', 'receive', static function (Request $r) use ($ledger): Response {
             $sku = trim((string) ($r->input('sku') ?? ''));
@@ -72,6 +76,8 @@ final class InventoryPlugin implements Plugin
                 $now = date('Y-m-d H:i:s');
                 $ledger->receive($sku, $ledger->ensureLocation($loc, $loc, $now), $qty, $uom, 'admin-ui', $now);
                 return Response::redirect('/admin/inventory?ok=received');
+            } catch (\InvalidArgumentException) {
+                return Response::redirect('/admin/inventory?err=badqty');
             } catch (\Throwable) {
                 return Response::redirect('/admin/inventory?err=invalid');
             }
@@ -91,6 +97,51 @@ final class InventoryPlugin implements Plugin
                 return Response::redirect('/admin/inventory?ok=adjusted');
             } catch (InsufficientStock) {
                 return Response::redirect('/admin/inventory?err=short');
+            } catch (\InvalidArgumentException) {
+                return Response::redirect('/admin/inventory?err=badqty');
+            } catch (\Throwable) {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+        });
+        $context->adminPages()->action('inventory', 'count', static function (Request $r) use ($ledger): Response {
+            $sku     = trim((string) ($r->input('sku') ?? ''));
+            $counted = trim((string) ($r->input('qty') ?? ''));
+            if ($sku === '' || $counted === '') {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+            $loc = trim((string) ($r->input('location') ?? '')) ?: 'main';
+            try {
+                $now   = date('Y-m-d H:i:s');
+                $locId = $ledger->ensureLocation($loc, $loc, $now);
+                $ledger->count($sku, $locId, $counted, $ledger->uomFor($sku, $locId) ?? 'each', 'admin-ui', $now);
+                return Response::redirect('/admin/inventory?ok=counted');
+            } catch (\InvalidArgumentException) {
+                return Response::redirect('/admin/inventory?err=badqty');
+            } catch (\Throwable) {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+        });
+        $context->adminPages()->action('inventory', 'transfer', static function (Request $r) use ($ledger): Response {
+            $sku  = trim((string) ($r->input('sku') ?? ''));
+            $qty  = trim((string) ($r->input('qty') ?? ''));
+            $from = trim((string) ($r->input('from') ?? ''));
+            $to   = trim((string) ($r->input('to') ?? ''));
+            if ($sku === '' || $qty === '' || $from === '' || $to === '') {
+                return Response::redirect('/admin/inventory?err=invalid');
+            }
+            if ($from === $to) {
+                return Response::redirect('/admin/inventory?err=samelocation');
+            }
+            try {
+                $now    = date('Y-m-d H:i:s');
+                $fromId = $ledger->ensureLocation($from, $from, $now);
+                $toId   = $ledger->ensureLocation($to, $to, $now);
+                $ledger->transfer($sku, $fromId, $toId, $qty, $ledger->uomFor($sku, $fromId) ?? 'each', 'admin-ui', $now);
+                return Response::redirect('/admin/inventory?ok=transferred');
+            } catch (InsufficientStock) {
+                return Response::redirect('/admin/inventory?err=short');
+            } catch (\InvalidArgumentException) {
+                return Response::redirect('/admin/inventory?err=badqty');
             } catch (\Throwable) {
                 return Response::redirect('/admin/inventory?err=invalid');
             }
