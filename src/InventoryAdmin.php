@@ -81,14 +81,16 @@ final class InventoryAdmin
 
         $html = '<div class="nb-page-head"><h1>Inventory</h1></div>' . $banner
             . '<p class="nb-muted" style="margin:-8px 0 20px">Stock as an append-only ledger — on-hand, reserved and available per location. '
-            . 'Receive, adjust, count or transfer below, or drive it over MCP.</p>'
-            . $this->datalists($skus, array_values($locations))
-            . $this->forms($csrf);
+            . 'Filter it below, record a movement, or drive it all over MCP.</p>'
+            . $this->datalists($skus, array_values($locations));
 
+        // Lead with the stock overview — the operator wants to *see* inventory
+        // first; the movement forms come after.
+        $html .= '<h2 style="margin-top:1.5rem">Stock on hand</h2>';
         $html .= $this->filterForm($q);
         if ($stock === []) {
             $html .= $q === ''
-                ? '<p class="nb-muted">No stock yet. Receive some above, or with the <code>inventory_receive</code> tool.</p>'
+                ? '<p class="nb-muted">No stock yet. Record a receipt below, or use the <code>inventory_receive</code> tool.</p>'
                 : '<p class="nb-muted">No stock matches “' . $this->e($q) . '”.</p>';
         } else {
             $html .= '<div class="nb-table-wrap nb-stack"><table class="nb-table"><thead><tr>'
@@ -107,6 +109,10 @@ final class InventoryAdmin
             }
             $html .= '</tbody></table></div>';
         }
+
+        // The movement forms, after the overview.
+        $html .= '<h2 style="margin-top:2rem">Record a movement</h2>';
+        $html .= $this->forms($csrf);
 
         $html .= '<h2 style="margin-top:2rem">Recent movements</h2>';
         if ($movements === []) {
@@ -155,7 +161,7 @@ final class InventoryAdmin
     {
         $t = '<input type="hidden" name="_token" value="' . $this->e($csrf) . '">';
 
-        return '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem">'
+        return '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1.5rem">'
             . '<form class="nb-form-card" method="post" action="/admin/inventory/receive" style="flex:1 1 240px">'
             . '<h2>Receive stock</h2>' . $t
             . $this->field('SKU', 'sku', 'e.g. house-blend', 'inv-skus')
