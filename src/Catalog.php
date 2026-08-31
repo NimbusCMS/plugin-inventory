@@ -129,6 +129,163 @@ final class Catalog
         );
     }
 
+    // --- public storefront reads (ADR 0023) ------------------------------
+
+    /** At or below this available quantity, an in-stock item reads as "low". */
+    private const LOW_STOCK_THRESHOLD = 5.0;
+
+    /** The columns a `sort` value may map to — the ORDER BY allow-list (no binding possible). */
+    private const SORT = [
+        'featured'   => 'i.featured DESC, i.name ASC',
+        'name'       => 'i.name ASC',
+        'price_asc'  => 'i.price ASC, i.name ASC',
+        'price_desc' => 'i.price DESC, i.name ASC',
+    ];
+
+    /** Items per storefront page. */
+    private const PER_PAGE = 24;
+
+    /**
+     * A public, paginated listing for the storefront (ADR 0023). **Active items
+     * only**, with **coarse** availability (in_stock/low/out — never a raw count),
+     * and a public-safe shape (no cost, on_hand, reserved, location, or the active
+     * flag). `sort` is an allow-list; `category` is a slug resolved to an id;
+     * `q` is a bound, escaped LIKE; `page` is a bounded int.
+     *
+     * @param array{category?:?string,q?:?string,sort?:?string,page?:int} $filters
+     * @return array{items:list<array{sku_code:string,name:string,price:string,unit:?string,description:?string,image_media_id:?int,category_id:?int,category:?string,featured:bool,availability:string}>,total:int,page:int,per_page:int,pages:int}
+     */
+    public function publicList(array $filters): array
+    {
+        $s = $this->storage();
+
+        [$where, $params] = $this->publicWhere($filters);
+        $order = self::SORT[$filters['sort'] ?? ''] ?? self::SORT['featured'];
+        $page  = max(1, (int) ($filters['page'] ?? 1));
+        $offset = ($page - 1) * self::PER_PAGE;
+
+        $countRow = $s->selectOne('SELECT COUNT(*) AS n FROM ' . Schema::ITEM . ' i' . $where, $params);
+        $total    = $countRow === null ? 0 : (int) $countRow['n'];
+
+        // LIMIT/OFFSET are bounded ints built here, never bound params (some MySQL
+        // setups reject bound LIMIT); every value in $params is bound.
+        $rows = $s->select(
+            'SELECT i.sku_code, i.name, i.price, i.unit, i.description, i.image_media_id, i.category_id, i.featured,
+                    c.name AS category,
+                    COALESCE(st.on_hand, 0) - COALESCE(rv.reserved, 0) AS available
+             FROM ' . Schema::ITEM . ' i
+             LEFT JOIN ' . Schema::CATEGORY . ' c ON c.id = i.category_id
+             LEFT JOIN (SELECT sku_code, SUM(on_hand) AS on_hand FROM ' . Schema::STOCK . ' GROUP BY sku_code) st ON st.sku_code = i.sku_code
+             LEFT JOIN (SELECT sku_code, SUM(qty) AS reserved FROM ' . Schema::RESERVATION . ' GROUP BY sku_code) rv ON rv.sku_code = i.sku_code'
+             . $where . ' ORDER BY ' . $order . ' LIMIT ' . self::PER_PAGE . ' OFFSET ' . $offset,
+            $params,
+        );
+
+        return [
+            'items'    => array_map($this->hydratePublic(...), $rows),
+            'total'    => $total,
+            'page'     => $page,
+            'per_page' => self::PER_PAGE,
+            'pages'    => $total === 0 ? 0 : (int) ceil($total / self::PER_PAGE),
+        ];
+    }
+
+    /**
+     * One public item by SKU, or null when it is absent **or not active** — so an
+     * inactive/hidden SKU is indistinguishable from a missing one on the
+     * storefront (no leak, and the caller renders a uniform 404).
+     *
+     * @return array{sku_code:string,name:string,price:string,unit:?string,description:?string,image_media_id:?int,category_id:?int,category:?string,featured:bool,availability:string}|null
+     */
+    public function publicGet(string $sku): ?array
+    {
+        $row = $this->storage()->selectOne(
+            'SELECT i.sku_code, i.name, i.price, i.unit, i.description, i.image_media_id, i.category_id, i.featured,
+                    c.name AS category,
+                    COALESCE(st.on_hand, 0) - COALESCE(rv.reserved, 0) AS available
+             FROM ' . Schema::ITEM . ' i
+             LEFT JOIN ' . Schema::CATEGORY . ' c ON c.id = i.category_id
+             LEFT JOIN (SELECT sku_code, SUM(on_hand) AS on_hand FROM ' . Schema::STOCK . ' GROUP BY sku_code) st ON st.sku_code = i.sku_code
+             LEFT JOIN (SELECT sku_code, SUM(qty) AS reserved FROM ' . Schema::RESERVATION . ' GROUP BY sku_code) rv ON rv.sku_code = i.sku_code
+             WHERE i.sku_code = :sku AND i.active = 1',
+            ['sku' => trim($sku)],
+        );
+        return $row === null ? null : $this->hydratePublic($row);
+    }
+
+    /**
+     * The category tree for storefront navigation — public fields only.
+     *
+     * @return list<array{id:int,name:string,slug:string,parent_id:?int}>
+     */
+    public function publicCategories(): array
+    {
+        return array_map(
+            static fn (array $c): array => ['id' => $c['id'], 'name' => $c['name'], 'slug' => $c['slug'], 'parent_id' => $c['parent_id']],
+            $this->allCategories(),
+        );
+    }
+
+    /**
+     * The active-only WHERE for the public reads, with an optional category (slug →
+     * id) and an escaped, bound search over name/description.
+     *
+     * @param array{category?:?string,q?:?string,sort?:?string,page?:int} $filters
+     * @return array{0:string,1:array<string,mixed>}
+     */
+    private function publicWhere(array $filters): array
+    {
+        $where  = ' WHERE i.active = 1';
+        $params = [];
+
+        $categorySlug = isset($filters['category']) ? trim((string) $filters['category']) : '';
+        if ($categorySlug !== '') {
+            $cat = $this->storage()->selectOne('SELECT id FROM ' . Schema::CATEGORY . ' WHERE slug = :slug', ['slug' => $categorySlug]);
+            // An unknown category yields an id that matches nothing (empty result),
+            // never an unfiltered listing.
+            $where          .= ' AND i.category_id = :cat';
+            $params['cat']   = $cat === null ? 0 : (int) $cat['id'];
+        }
+
+        $q = isset($filters['q']) ? trim((string) $filters['q']) : '';
+        if ($q !== '') {
+            $q = mb_substr($q, 0, 100);
+            // Escape LIKE wildcards so a `%`/`_` in the term is a literal, not a
+            // match-all; the term itself is bound.
+            $like            = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q) . '%';
+            $where          .= " AND (i.name LIKE :q ESCAPE '\\\\' OR i.description LIKE :q2 ESCAPE '\\\\')";
+            $params['q']     = $like;
+            $params['q2']    = $like;
+        }
+
+        return [$where, $params];
+    }
+
+    /**
+     * Shape a joined public row: coarse availability, no leak fields.
+     *
+     * @param array<string,mixed> $row
+     * @return array{sku_code:string,name:string,price:string,unit:?string,description:?string,image_media_id:?int,category_id:?int,category:?string,featured:bool,availability:string}
+     */
+    private function hydratePublic(array $row): array
+    {
+        $available = (float) $row['available'];
+        $status    = $available <= 0.0 ? 'out' : ($available <= self::LOW_STOCK_THRESHOLD ? 'low' : 'in_stock');
+
+        return [
+            'sku_code'       => (string) $row['sku_code'],
+            'name'           => (string) $row['name'],
+            'price'          => (string) $row['price'],
+            'unit'           => $row['unit'] === null ? null : (string) $row['unit'],
+            'description'    => $row['description'] === null ? null : (string) $row['description'],
+            'image_media_id' => $row['image_media_id'] === null ? null : (int) $row['image_media_id'],
+            'category_id'    => $row['category_id'] === null ? null : (int) $row['category_id'],
+            'category'       => $row['category'] === null ? null : (string) $row['category'],
+            'featured'       => (bool) $row['featured'],
+            'availability'   => $status,
+        ];
+    }
+
     // --- categories ------------------------------------------------------
 
     /**

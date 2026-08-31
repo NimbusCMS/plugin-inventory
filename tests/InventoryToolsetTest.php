@@ -85,8 +85,8 @@ final class InventoryToolsetTest extends TestCase
             'inventory_receive', 'inventory_adjust', 'inventory_count',
             'inventory_transfer', 'inventory_reserve', 'inventory_release',
             'inventory_issue', 'inventory_stock', 'inventory_movements',
-            'inventory_item_set', 'inventory_item_get', 'inventory_category_set',
-            'inventory_category_get', 'inventory_categories',
+            'inventory_item_set', 'inventory_item_get', 'inventory_items',
+            'inventory_category_set', 'inventory_category_get', 'inventory_categories',
         ], $names);
     }
 
@@ -95,7 +95,7 @@ final class InventoryToolsetTest extends TestCase
         $names = array_column($this->toolset->definitions($this->principal('nimbuscms.inventory:read')), 'name');
         self::assertSame([
             'inventory_stock', 'inventory_movements', 'inventory_item_get',
-            'inventory_category_get', 'inventory_categories',
+            'inventory_items', 'inventory_category_get', 'inventory_categories',
         ], $names);
     }
 

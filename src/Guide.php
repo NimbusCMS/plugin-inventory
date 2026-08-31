@@ -55,6 +55,8 @@ final class Guide
             - `inventory_item_set` — create/update a SKU's item (name, price,
               category, unit, image, flags). Only the fields you send change.
             - `inventory_item_get` — a SKU's item record, or none.
+            - `inventory_items` — list items (all, or matching a `q` search over SKU
+              and name) to manage the catalog.
             - `inventory_category_set` — create (omit `id`) or rename/reparent (with
               `id`) a category. `inventory_category_get` / `inventory_categories`
               read them.
