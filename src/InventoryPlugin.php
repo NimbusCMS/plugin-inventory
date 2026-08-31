@@ -57,6 +57,10 @@ final class InventoryPlugin implements Plugin
         // stock synchronously without touching Inventory's tables (ADR 0019).
         $context->services()->provide(ReservationPort::class, new ReservationAdapter($ledger, $reservations));
 
+        // Publish the public catalog read contract (ADR 0023) so a storefront can
+        // render items — active-only, coarse availability — without touching tables.
+        $context->services()->provide(CatalogReadPort::class, new CatalogReadAdapter($catalog));
+
         // Admin page: an overview plus the receive/adjust/count/transfer forms (H3).
         // Gated on this plugin's own wildcard-immune capability (ADR 0020) — moving
         // stock in the UI needs `nimbuscms.inventory:write`, exactly like the MCP

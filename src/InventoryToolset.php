@@ -124,6 +124,11 @@ final class InventoryToolset extends PluginToolset
                 'properties' => ['sku' => $sku],
             ], $this->itemGet(...)),
 
+            new PluginTool('items', 'read', 'List sellable items (all, or those whose SKU or name matches a search), for managing the catalog.', [
+                'type'       => 'object',
+                'properties' => ['q' => ['type' => 'string', 'description' => 'Optional search over SKU and name.']],
+            ], $this->items(...)),
+
             new PluginTool('category_set', 'write', 'Create a category (omit id) or rename/reparent one (with id). Two levels only.', [
                 'type'       => 'object',
                 'required'   => ['name'],
@@ -302,6 +307,16 @@ final class InventoryToolset extends PluginToolset
     {
         $sku = $this->str($a, 'sku');
         return ['sku' => $sku, 'item' => $this->catalog->getItem($sku)];
+    }
+
+    /**
+     * @param array<string,mixed> $a
+     * @return array<string,mixed>
+     */
+    private function items(array $a, TokenPrincipal $p, EntryOpContext $c): array
+    {
+        $items = $this->catalog->allItems($this->nullableStr($a, 'q'));
+        return ['items' => $items, 'count' => count($items)];
     }
 
     /**

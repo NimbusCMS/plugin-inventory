@@ -11,6 +11,7 @@ use Nimbus\Mcp\McpToolsetRegistry;
 use Nimbus\Plugin\PluginCapabilities;
 use Nimbus\Plugin\PluginLoader;
 use Nimbus\Plugin\ServiceRegistry;
+use NimbusCMS\Inventory\CatalogReadPort;
 use NimbusCMS\Inventory\InventoryPlugin;
 use NimbusCMS\Inventory\ReservationPort;
 use PHPUnit\Framework\TestCase;
@@ -103,6 +104,7 @@ final class PackageIntegrationTest extends TestCase
         self::assertCount(1, $mcpToolsets->all(), 'its MCP toolset');
         self::assertNotSame([], $skills->documents(), 'its agent guide');
         self::assertInstanceOf(ReservationPort::class, $services->get(ReservationPort::class), 'it publishes the reservation port');
+        self::assertInstanceOf(CatalogReadPort::class, $services->get(CatalogReadPort::class), 'it publishes the catalog read port');
     }
 
     public function test_disabling_the_package_registers_nothing(): void
